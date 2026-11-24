@@ -1,0 +1,64 @@
+{
+ "version": 1,
+ "generator": "scripts/build_keys_extra.py",
+ "note": "离线扩键产物：只增不改，依据必须来自条目自带的 formation(接续) 字段",
+ "entries": [
+  {
+   "id": "ag:1725102351150",
+   "pattern": "てはかなわない",
+   "add_keys": [
+    "ではかなわない"
+   ],
+   "basis": "Ｖては／イＡいくては／ナＡでは／Ｎでは＋かなわない",
+   "guard": null
+  },
+  {
+   "id": "oj:mo-ba-mo",
+   "pattern": "〜も〜ば〜も",
+   "add_keys": [
+    "も〜なら〜も"
+   ],
+   "basis": "Noun + も + Verb-ba + Noun + も / Noun + も + i-Adj stem + ければ + Noun + も",
+   "guard": {
+    "slot": 1,
+    "prev_pos": [
+     "形状詞",
+     "名詞"
+    ]
+   }
+  },
+  {
+   "id": "ag:1725102351444",
+   "pattern": "も〜ば、〜も",
+   "add_keys": [
+    "も〜なら、〜も"
+   ],
+   "basis": "Ｎも＋Ｖば／イＡければ／ナＡなら／Ｎなら＋Ｎも",
+   "guard": {
+    "slot": 1,
+    "prev_pos": [
+     "形状詞",
+     "名詞"
+    ]
+   }
+  },
+  {
+   "id": "ag:1725102351149",
+   "pattern": "てはいけない",
+   "add_keys": [
+    "ではいけない"
+   ],
+   "basis": "Ｖては／イＡくては／ナＡでは／Ｎでは＋いけない",
+   "guard": null
+  },
+  {
+   "id": "oj:te-wa-ikenai",
+   "pattern": "〜てはいけない",
+   "add_keys": [
+    "ではいけない"
+   ],
+   "basis": "Verb-te + はいけない",
+   "guard": null
+  }
+ ]
+}

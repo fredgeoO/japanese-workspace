@@ -46,11 +46,19 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 GRAMMAR_JSON = ROOT / "data" / "grammar.json"
 GRAMMAR_DB = ROOT / "data" / "ja_grammar.sqlite"
 DICT_DB = ROOT / "data" / "ja_dict.sqlite"
+# 离线扩键产物（scripts/build_keys_extra.py 生成）：只读，缺失时退回内置 KEY_ALIASES
+EXTRA_KEYS_PATH = ROOT / "data" / "grammar_keys_extra.json"
 
 LEVEL_ORDER = {"N5": 5, "N4": 4, "N3": 3, "N2": 2, "N1": 1}
 DEBUG = bool(os.environ.get("JA_LOOKUP_DEBUG"))
 
 SENT_PUNCT = set("。！？、…ー〜～")  # 尾串不得跨越的句读/长音边界（、也断开，防跨词粘连）
+# 段间是否允许跨越：只认真正的句读。长音符号 ー 是词内音标（アフターケア、コーヒー），
+# 拿它当段落边界会把「値段も手ごろなら、アフターケアも…」这类正常句子整段挡掉。
+BOUNDARY = set("。！？、…")
+# 单字助词段必须独立成 token，不许退化为子串包含：
+# 否则 でも/から 里的 も 会被当成「も〜なら〜も」的那个 も（人ならだれでも → 假命中）。
+PARTICLE_EXACT = set("もはがをにとへやかねよ")
 
 def norm(s):
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", s or ""))
@@ -68,6 +76,68 @@ def _hira(s):
 def _rich(e):
     return bool(e.get("nuance") or e.get("examples") or e.get("formation"))
 
+# 同功能 key 变体（2026-11-24）：库内并列表只收了 ば 版（も〜ば、〜も / も〜ば〜も），
+# 但同一句型在 ナA/N 上换 なら 是同一功能——「も〜ば、〜も」的接续字段自己写着
+# 「Ｎも＋Ｖば／イＡければ／ナＡなら／Ｎなら＋Ｎも」。整句命中只认字面 key，于是
+# 「値段も手ごろなら、アフターケアも…」会漏掉这张并列表，反而命中无关的条件 なら。
+# 只补窄变体：必须带逗号或成套的 も〜なら〜も，避免广谱误配（条件なら 不带这套 も…も）。
+# 下面两条是**内置兜底**，与 data/grammar_keys_extra.json 里的同名条目重复（加载时去重）；
+# 文件被删/损坏时仍能命中，主数据源以文件为准（scripts/build_keys_extra.py 生成）。
+KEY_ALIASES = {
+    "も〜ば、〜も": ["も〜なら、〜も"],
+    "も〜ば〜も": ["も〜なら〜も"],
+}
+
+# 变体键的附加条件：なら 只有接 ナ形容词/名词 时才是并列义（接动词＝条件义，不是这张表）。
+# 格式 {变体key: (槽位段序号, 段首 token 允许的前一 token 词性前缀)}
+ALIAS_GUARDS = {
+    "も〜なら、〜も": (1, ("形状詞", "名詞")),
+    "も〜なら〜も": (1, ("形状詞", "名詞")),
+}
+
+def expand_keys(keys):
+    """内置兜底：条目的 keys + 同功能变体（文件缺失时仍能命中已知那两条）。"""
+    out = []
+    for k in keys or []:
+        out.append(k)
+        out.extend(KEY_ALIASES.get(norm(k).lstrip("〜~～"), ()))
+    return out
+
+
+def load_extra_keys(path=None):
+    """读离线扩键产物 → ({entry_id: [key,...]}, {key: (slot, prev_pos)})。
+    文件缺失/损坏时返回空表，不影响内置兜底。"""
+    path = path or EXTRA_KEYS_PATH
+    by_id, guards = {}, {}
+    try:
+        data = json.loads(pathlib.Path(path).read_text("utf-8"))
+    except Exception:
+        return by_id, guards
+    for rec in data.get("entries") or []:
+        eid = rec.get("id")
+        if not eid:
+            continue
+        for k in rec.get("add_keys") or []:
+            k = norm(k).lstrip("〜~～")
+            if not k:
+                continue
+            by_id.setdefault(eid, []).append(k)
+            g = rec.get("guard") or {}
+            if g.get("slot") is not None and g.get("prev_pos"):
+                guards[k] = (int(g["slot"]), tuple(g["prev_pos"]))
+    return by_id, guards
+
+
+EXTRA_BY_ID, EXTRA_GUARDS = load_extra_keys()
+ALIAS_GUARDS = {**ALIAS_GUARDS, **EXTRA_GUARDS}
+
+
+def entry_key_list(e):
+    """条目的全部检索键：自带 keys + 内置变体 + 离线扩键（按条目 id 挂）。"""
+    keys = expand_keys(e.get("keys") or [])
+    keys.extend(EXTRA_BY_ID.get(e.get("id"), ()))
+    return list(dict.fromkeys(keys))
+
 # ---------------- 语法库 ----------------
 class GrammarDB:
     def __init__(self):
@@ -80,7 +150,7 @@ class GrammarDB:
         for e in entries:
             if not self._entry_ok(e):
                 continue
-            for k in e.get("keys", []):
+            for k in entry_key_list(e):
                 k = norm(k).lstrip("〜~～")
                 if len(k) >= 2 and self._key_valid(k):
                     self.index.append((k, any(is_kanji(c) for c in k), e))
@@ -143,30 +213,6 @@ class GrammarDB:
                 continue
             kept += 1
         return kept > 0
-
-    def _entry_keys(self, e):
-        """条目在索引里的合法 keys（与 index 同一套过滤），带 has_kanji 标记。"""
-        textbook = "anki_besshiki" in (e.get("sources") or [])
-        out = []
-        for k in e.get("keys", []):
-            k = norm(k).lstrip("〜~～")
-            if len(k) >= 2 and self._key_valid(k) and k not in GrammarDB._BARE \
-                    and (textbook or len(k) > 2 or any(is_kanji(c) for c in k)
-                         or k in GrammarDB._SHORT_OK):
-                out.append((k, any(is_kanji(c) for c in k)))
-        return out
-
-    def _entry_keys(self, e):
-        """条目在索引里的合法 keys（与 index 同一套过滤），带 has_kanji 标记。"""
-        textbook = "anki_besshiki" in (e.get("sources") or [])
-        out = []
-        for k in e.get("keys", []):
-            k = norm(k).lstrip("〜~～")
-            if len(k) >= 2 and self._key_valid(k) and k not in GrammarDB._BARE \
-                    and (textbook or len(k) > 2 or any(is_kanji(c) for c in k)
-                         or k in GrammarDB._SHORT_OK):
-                out.append((k, any(is_kanji(c) for c in k)))
-        return out
 
     # ---- 汉字段 -> 假名读音展开（词典库懒加载） ----
     def _dict_db(self):
@@ -252,7 +298,7 @@ class GrammarDB:
         # 否则 金もなければ時間もない 里 も(1) 会挡住 ば(3) 的可达性。
         # 段间窗口内出现句读点则拒绝该段起点（防跨句粘连）。
         def _clean_between(a, b):
-            return not any(any(c in SENT_PUNCT for c in tokens[k]) for k in range(a, b))
+            return not any(any(c in BOUNDARY for c in tokens[k]) for k in range(a, b))
         spans = []
         for si, seg in enumerate(segs):
             span = None
@@ -266,6 +312,15 @@ class GrammarDB:
             if spans and span[0] - spans[-1][1] > 6:
                 return None
             spans.append(span)
+        # 变体键的接续闸：なら 接动词时是条件义，不是「も〜なら〜も」并列表
+        guard = ALIAS_GUARDS.get(key)
+        if guard:
+            si, allowed_pos = guard
+            start = spans[si][0] if si < len(spans) else 0
+            if start == 0 or not pos_list:
+                return None
+            if (pos_list[start - 1][0] or "") not in allowed_pos:
+                return None
         return (spans[0][0], spans[-1][1])
 
     def _find_seg(self, seg, s, tokens, readings, dicts, after, loose=False):
@@ -280,6 +335,8 @@ class GrammarDB:
             if loose:
                 for i in range(lo, hi):
                     if vkey in tokens[i] or vkey in readings[i]:
+                        if vkey in PARTICLE_EXACT and vkey != tokens[i] and vkey != readings[i]:
+                            continue
                         return (i, i + 1)
                 continue
             # 分支 1：连续整 token 精确拼接（surface 或读音）
@@ -370,7 +427,7 @@ class GrammarDB:
     def _entry_keys(self, e):
         """条目在索引里的合法 keys（与 index 同一套过滤），带 has_kanji 标记。"""
         out = []
-        for k in e.get("keys", []):
+        for k in entry_key_list(e):
             k = norm(k).lstrip("〜~～")
             if len(k) >= 2 and self._key_valid(k):
                 out.append((k, any(is_kanji(c) for c in k)))

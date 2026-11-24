@@ -2,9 +2,11 @@
 """语法匹配命中率测试：12 个典型句子，检查目标句型是否命中、噪音是否可控。
 
 跑法：.venv\\Scripts\\python.exe scripts/test_match.py
-退出码 0 = 回归通过（KNOWN_HITS 全部命中），1 = 有回归失败。
-README 记录的基线是 7/12；未命中里多数是数据源本身缺条目，故只对
+退出码 0 = 回归通过（KNOWN_HITS 全部命中 + ALIAS_CASES 正反例都对），1 = 有回归失败。
+当前基线 8/12；未命中里多数是数据源本身缺条目，故只对
 KNOWN_HITS（当前库能命中的句型）设硬闸门，其余仅报告不判失败。
+ALIAS_CASES（2026-11-24 加）单独守「同功能变体键 + 接续闸门」：正例必须命中、
+反例（なら 接动词＝条件义）必须不命中。
 """
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -52,6 +54,31 @@ for sent, target in CASES:
     print(f"   -> {names if names else '（无命中）'}")
     if target in KNOWN_HITS and not hit:
         regressions.append(target)
+# 2026-11-24：同功能变体键 + 接续闸门回归。
+# 库内只有「も〜ば、〜も」，ナA/N 上同一句型写 なら（接续字段自己写着 ナＡなら／Ｎなら），
+# 故给该条目加了 も〜なら、〜も 变体键；但 なら 接动词是条件义，必须被接续闸门挡住。
+# 三元组：(句子, 期望命中的 pattern 子串, 是否期望命中)
+ALIAS_CASES = [
+    ("値段も手ごろなら、アフターケアもきちんとしています。", "も〜ば", True),  # ナA＋なら
+    ("この店は味も本物なら、値段も安い。", "も〜ば", True),                    # 名詞＋なら
+    ("味もよければ値段も安い。", "も〜ば", True),                              # イA＋ければ（原键）
+    ("値段が手ごろなら、その車を買いたい。", "も〜ば", False),                 # 条件なら，无第二個も
+    ("私も行くなら、君も来るといい。", "も〜ば", False),                       # なら接动词＝条件，闸门拦
+    ("彼は人ならだれでも援助する。", "も〜ば", False),                         # でも 里的 も 不算段的 も
+    ("こんな薄暗い部屋で本を読んではいけない。", "てはいけない", True),        # ては→では（动词て形）
+    ("学生ではいけない。", "てはいけない", True),                              # ては→では（名词）
+    ("こんなに混んでいてはかなわない。", "てはかなわない", True),              # 原键仍命中
+]
+
+for sent, probe, want in ALIAS_CASES:
+    names = [h["pattern"] for h in g.match(sent, tokenizer=tok)]
+    got = any(probe in n for n in names)
+    mark = "✓" if got == want else "✗"
+    print(f"{mark} [变体键 期望{'命中' if want else '不命中'}] {sent}")
+    print(f"   -> {names if names else '（无命中）'}")
+    if got != want:
+        regressions.append(f"变体键:{sent}")
+
 print(f"\n命中率: {ok}/{len(CASES)}")
 if regressions:
     print(f"回归失败（基线句型未命中）: {', '.join(regressions)}")
