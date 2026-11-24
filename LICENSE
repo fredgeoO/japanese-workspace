@@ -1,0 +1,36 @@
+MIT License
+
+Copyright (c) 2026 japanese-workspace contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+本 LICENSE 仅适用于本仓库自研的代码与文档（scripts/、skills/、README.md、AGENTS.md 等）。
+
+仓库内或由其构建管线生成的**数据**不归本 MIT 许可管辖，各自遵循上游许可，
+详见 README.md「数据源与许可」一节：
+
+- JMdict / Jitendex / jmdict-simplified / OpenJLPT / jkindrix / KANJIDIC2 / Kanjium：CC BY-SA 4.0（EDRDG / 上游作者）
+- Tatoeba 日中句对：CC BY 2.0 FR
+- 日本語WordNet：NICT 免费许可（类 BSD）
+- wordfreq：MIT / Apache（数据 CC BY-SA）
+- SudachiPy / sudachidict_core：Apache 2.0
+- zh_nuance.json / zh_kanji.json：本地模型对库内英文的转写，属派生数据，
+  随其所派生的上游条目许可（CC BY-SA 4.0）

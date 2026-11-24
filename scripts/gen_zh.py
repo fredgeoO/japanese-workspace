@@ -12,6 +12,7 @@
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
 import sqlite3
@@ -21,7 +22,8 @@ import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
-ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
+# 本地模型端点：默认 127.0.0.1:8080，可用环境变量 JA_LLM_BASE_URL 覆盖（不含 /v1/... 路径）
+ENDPOINT = os.environ.get("JA_LLM_BASE_URL", "http://127.0.0.1:8080").rstrip("/") + "/v1/chat/completions"
 MODEL = "qwen3.8-flash-next-ud_iq3_xxs"
 
 SYS_NUANCE = """你在为一个日语学习工具做「英文 → 中文」讲解转写。输入是若干条语法点的英文语感说明，key 是条目 id。

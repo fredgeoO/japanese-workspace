@@ -20,3 +20,16 @@
      3. **语法点**（＋有依据的易错提醒，没有就不写）
    - 单个词或语法点 → 快查三段模板
    - 检索空手而归（文语/歌词/生僻写法）→ 仍按精读模板输出并标注推断，不得因查不到就不解释。
+
+## 真实例句补充（本地库无例句时）
+
+本地 `--sent`/词典例句字段为空、或想要口语感更强的真实语料时，用本工作区自带的
+Jisho 检索脚本（只负责抓 Jisho 的 Tatoeba/Jreibun 人工语料例句，其余解释工作仍走上面的流程）：
+
+```
+.venv\Scripts\python.exe -X utf8 jisho\tools\jisho_example.py --word "頷く" --reading "うなずく" --json
+```
+
+规则：一次调用只抓一页（Jisho 要求 40s 爬取间隔，禁止循环刷词）；句子逐字照抄返回结果，
+注音在 `annotations` 字段；无候选时（exit 2）不得退回模型造句，换词形或放宽长度再试。
+引用时挂 `[Jisho·Tatoeba]` / `[Jisho·Jreibun]` 标注。详见 [jisho/README.md](jisho/README.md)。

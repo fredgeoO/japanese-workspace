@@ -16,3 +16,14 @@ __pycache__/
 
 # 日志
 *.log
+
+# 问专家工具产物（ask-expert skill）
+ask-out/
+q*.md
+ask-slots*.json
+
+# 一次性临时脚本
+temp_*
+
+# jisho 子项目：第三方库一律走 .venv，不再 vendored
+jisho/data/

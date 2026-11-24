@@ -30,9 +30,11 @@ japanese-workspace/
 │   ├── fetch_p1.py             # 下载 P1 源：KANJIDIC2 / Kanjium / Tatoeba / WordNet
 │   ├── build_grammar.py        # 清洗合并 → grammar.json + ja_grammar.sqlite（含活用表/中译）
 │   ├── build_dict.py           # 清洗合并 → ja_dict.sqlite（词/汉字/WordNet/句对）
-│   ├── gen_zh.py               # 本地模型生成：英文讲解→中文、汉字英文义→中文
+│   ├── gen_zh.py               # 本地模型生成：英文讲解→中文、汉字英文义→中文（端点可用 JA_LLM_BASE_URL 覆盖）
 │   ├── ja_lookup.py            # 检索库（GrammarDB / DictDB / ConjDB / KanjiDB / WordNetDB）
-│   └── test_match.py           # 语法命中率测试
+│   └── test_match.py           # 语法命中率测试（带回归闸门，非零退出码=回归）
+├── jisho/                      # 子项目：抓 Jisho 真实例句（依赖走 .venv，见 jisho/README.md）
+├── LICENSE                     # 仓库自研代码 MIT；数据各循上游许可（见下「数据源与许可」）
 └── README.md
 ```
 
@@ -54,6 +56,11 @@ japanese-workspace/
 | **日中例句** | [Tatoeba](https://tatoeba.org/en/downloads) | CC BY 2.0 FR | **16,288 对**日中句对 |
 | **中文讲解转写** | 本地模型（qwen3.8-flash-next）译自库内英文 | 派生数据（不上游） | **1,099 条**语法语感 + **2,109 字**常用汉字义 |
 | 分词 | [SudachiPy](https://github.com/WorksApplications/SudachiPy) + sudachidict_core | Apache 2.0 | — |
+
+> 许可边界：仓库**自研代码与文档**（`scripts/`、`skills/`、`README.md`、`AGENTS.md` 等）采用 [MIT](LICENSE)；
+> 上表所列**数据**不受 MIT 管辖，各自遵循上游许可。`data/grammar.json`、`data/anki_grammar.json`、
+> `data/zh_*.json` 虽是脚本产物，但分别依赖外部 Anki 库快照与本地 LLM 非确定翻译，移出 git 会破坏
+> 「clone 即用 + 结果可复现」，故作为稳定资产保留跟踪。
 
 ## 环境（自包含，不依赖其他工作区）
 
@@ -83,13 +90,14 @@ python scripts/fetch_p1.py        # KANJIDIC2 / Kanjium / Tatoeba / WordNet
 python scripts/build_grammar.py
 python scripts/build_dict.py
 
-# 2.5（可选）重新生成中文讲解 / 汉字中文义，需要本地模型端点 127.0.0.1:8080
+# 2.5（可选）重新生成中文讲解 / 汉字中文义，需要本地模型端点（默认 127.0.0.1:8080，
+#     可用环境变量 JA_LLM_BASE_URL 覆盖，如 $env:JA_LLM_BASE_URL="http://127.0.0.1:8080"）
 #     生成结果落在 data/zh_nuance.json / data/zh_kanji.json，再跑一次上面的 build 才会入库
 python scripts/gen_zh.py --nuance
 python scripts/gen_zh.py --kanji
 
-# 3. 验证
-python scripts/test_match.py
+# 3. 验证（两个脚本都带退出码：0=通过，1=回归/失败，可直接用于 CI 或提交前自查）
+python scripts/test_match.py       # 语法命中率回归闸门（基线句型未命中则非零退出）
 python scripts/test_p1.py          # 汉字/活用/WordNet/例句/音调/频度 冒烟测试
 ```
 
