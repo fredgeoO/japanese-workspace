@@ -1,0 +1,4 @@
+# 检索层依赖（构建脚本只用标准库，不需要这些）
+# 安装：python -m venv .venv && .venv\Scripts\python -m pip install -r requirements.txt
+sudachipy==0.7.0
+sudachidict_core==20261015

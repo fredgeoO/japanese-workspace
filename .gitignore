@@ -1,0 +1,18 @@
+# 虚拟环境（重建：python -m venv .venv && pip install -r requirements.txt）
+.venv/
+
+# 临时目录
+.tmp/
+
+# 原始下载数据（重建：python scripts/fetch_data.py / fetch_jmdict.py / fetch_jitendex_zh.py / fetch_p1.py）
+data/raw/
+
+# 构建产物：大 SQLite（重建：python scripts/build_grammar.py / build_dict.py）
+data/*.sqlite
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 日志
+*.log
