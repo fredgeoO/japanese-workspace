@@ -24,14 +24,19 @@
      surface / 平假名读音 / 词典形 / 词性；
   2. 检索键（key）在加载期做合法性过滤（_entry_ok：裸虚词、碎片 key、
      含 ASCII/全角波浪号等一律不进索引）；
-  3. 命中判定 _find()，两支都要求「连续整 token 精确拼接」：
+  3. 命中判定 _find()，要求「连续整 token 对齐」（不做子串包含）：
      - 分支 1（所有 key）：连续 token 的 surface 或平假名读音拼接 == key；
-     - 分支 2（仅含汉字 key）：汉字锚点段 == 某 token 的 surface/词典形/读音，
-       假名尾串紧随其后（间隔 ≤6 token、不跨句读点）由连续 token 精确拼接；
+       纯假名 key 的**末 token** 允许用词典形（てくる ⇄ てきました）；
+     - 分支 2（含汉字 key）：键切成「汉字段 / 假名段」交替按序紧邻对齐
+       （_seg_match）——汉字段整 token 命中、假名段拼接命中、段末允许词典形
+       （得ない ⇄ 得なかった）；假名前缀也能进（を禁じ得ない / あごを出す）；
        key 的汉字段经词典库展开成假名变体（_reading_cache），
        使假名书写的句子（わけではない）也能命中汉字 key（訳ではない）；
-  4. 命中多条时按「命中 key 更长 → 等级更高」排序，去包含冗余
-     （同长 key 按 rich 优先），出口只保留 rich 条目（有讲解或例句）。
+  4. 命中多条时按「命中 key 更长 → 等级更高 → 字段更完整」排序，去包含冗余
+     （同长 key 按 rich 优先），出口只保留 rich 条目（有讲解或例句；闸门在去冗余之前），
+     默认截到 4 条（--max-hits 可调）；--json 每条 hit 带 span=[起,止] token 窗口。
+  5. 整句模式数据层异常（缺分词依赖/grammar.json/sqlite）不再裸 traceback，
+     输出 {"degraded": true, "reason": ...} 且 exit 0。
 
 调试：设环境变量 JA_LOOKUP_DEBUG=1，命中详情打到 stderr。
 """
@@ -150,6 +155,13 @@ class GrammarDB:
         for e in entries:
             if not self._entry_ok(e):
                 continue
+            # 只索引能出口的富条目（有接续/语感/例句）。
+            # 裸条目在出口闸门必被丢，但若留在索引里，会在 _dedup 阶段把真正的语法条目
+            # 挤掉、自己再被闸门丢掉——净损失（例句体检里「健康そのもの」「冗談めかす」
+            # 这类 id=ex: 的例句短语条目就这样压掉了 そのもの / めかす 两张正经条目）。
+            # 顺带把索引从 25,561 键瘦到富条目规模，match() 明显变快。
+            if not _rich(e):
+                continue
             for k in entry_key_list(e):
                 k = norm(k).lstrip("〜~～")
                 if len(k) >= 2 and self._key_valid(k):
@@ -176,6 +188,18 @@ class GrammarDB:
     _FRAG = {"しない", "しないか", "ないか", "かは", "だけは", "としては",
              "として", "ないの", "のか", "のだ", "んだ", "ので", "のに",
              "ないで", "なくて", "ないが", "ないし", "ないなら"}
+
+    # 整句匹配专用裸功能词（2026-11-25 去噪）：这些词几乎每个句子都出现，
+    # 作为单 key 命中毫无信息量——「寝坊して…」曾靠 して/する/のり 误命中
+    # 大山鳴動して鼠一匹、丑の刻参り、お〜する 等几十条无关条目。
+    # 只影响 match() 整句匹配；--grammar 定向查询走 search()，不受影响。
+    # 真句型（〜てしまう / 〜ぬきにして 等）都有更长的成套 key，不靠裸词命中。
+    # 注意：「ない/はず/こと/もの/ため/ところ/ほど/だけ/しか/まで/から/ので/
+    # のに/ながら/つつ/きり/さえ/まま/なり/まい/べし/ずに」等**不能进表**——
+    # 库里存在以它们为唯一 key 的真句型条目（「〜ない」终助疑问、「ずに」否定连用、
+    # 「〜はずだ」等），误杀会被 test_match.py 抓到。
+    _MATCH_STOP = {"する", "して", "した", "します", "のり", "より",
+                   "つき", "だき"}
 
     @staticmethod
     def _key_valid(key):
@@ -339,55 +363,105 @@ class GrammarDB:
                             continue
                         return (i, i + 1)
                 continue
-            # 分支 1：连续整 token 精确拼接（surface 或读音）
+            # 分支 1：连续整 token 精确拼接（surface / 读音；纯假名键的末 token 允许词典形）
+            # 「末 token 词典形」是 2026-11-27 加的：教材源 key 多是辞书形（てくる /
+            # ている / られる / させる），句子里却是活用形（てきました / られて）。
+            # Sudachi 把 きました 切成 き/まし/た，surface 与读音都拼不出 てくる；
+            # 只把**最后一个 token** 换成词典形（き→くる）就能对上。
+            # 例句体检：anki_besshiki 的 1,886 个未命中里 958 个（51%）属这类纯活用差。
+            # 两条限制（都是实测加的，别放开）：
+            #   ① 只对纯假名键开放。汉字动词键（行く/来る/言う）一旦吃词典形，会去匹配
+            #      行っ/来/言っ，把 いらっしゃる、参る 这类「以 行く 为键的词条」拉进榜，
+            #      排序把 ずに 挤到第 6（test_match 基线当场回归失败）。
+            #   ② 只换末 token。整条词典形流会让 何も〜ない 一类长键借活用抢更长命中。
+            # 汉字活用形由分支 2 的「段末活用对齐」负责（得ない ⇄ 得なかった）。
+            kana_key = not has_kanji
             for src in (tokens, readings):
                 for i in range(lo, hi):
                     acc = ""
                     for j in range(i, min(i + 8, n)):
                         t = src[j]
+                        if kana_key and dicts[j] and acc + dicts[j] == vkey:
+                            return (i, j + 1)
                         if not t or not vkey.startswith(acc + t):
                             break
                         acc += t
                         if acc == vkey:
                             return (i, j + 1)
-            # 分支 1.5：词典形整 token 对齐（活用形句子里的整词 key）。
-            # 教材源 pattern 多为辞书形（あげる/あいだ），而 Sudachi 把
-            # あげました 切成 あげ/まし/た —— surface/读音永远拼不出「あげる」。
-            # 仅对纯假名 key 启用，要求整 token 词典形精确相等，不做拼接，
-            # 避免退化为子串包含。
-            if not has_kanji:
-                for i in range(lo, hi):
-                    if dicts[i] == vkey:
-                        return (i, i + 1)
             if not has_kanji:
                 continue
-            # 分支 2：汉字锚点 + 假名尾串
-            m = re.match(r"^([\u4e00-\u9fff]+)(.*)$", vkey)
-            if not m:
-                continue
-            anchor, tail = m.group(1), m.group(2)
-            anchor_forms = {anchor} | self._kanji_readings(anchor)
-            for i in range(lo, hi):
-                hit_anchor = (tokens[i] in anchor_forms
-                              or dicts[i] in anchor_forms
-                              or readings[i] in anchor_forms)
-                if not hit_anchor:
-                    continue
-                if not tail:
-                    return (i, i + 1)
-                for src in (tokens, readings):
-                    acc = ""
-                    for j in range(i + 1, min(i + 7, n)):
-                        if any(c in SENT_PUNCT for c in src[j]):
-                            break
-                        acc += src[j]
-                        if not tail.startswith(acc):
-                            break
-                        if acc == tail:
-                            return (i, j + 1)
+            # 分支 2：汉字段/假名段交替对齐（取代旧的「汉字锚点＋假名尾串」）
+            span = self._seg_match(vkey, tokens, readings, dicts, lo, hi)
+            if span:
+                return span
         return None
 
-    def match(self, sentence, max_hits=8, tokenizer=None):
+    # 键切分：汉字段 / 假名段交替（非常规字符如 、（）/ 的键不走分支 2）
+    _SEG_RE = re.compile(r"[\u4e00-\u9fff]+|[\u3041-\u30ff]+")
+
+    def _seg_match(self, vkey, tokens, readings, dicts, lo, hi):
+        """分支 2 实现：把键切成「汉字段 / 假名段」交替，按序紧邻对齐 token。
+
+        旧实现要求键必须以汉字开头（^kanji+），尾串再整串精确拼接，有两个洞：
+          1. 「假名前缀＋汉字锚点」的键永远进不了分支 2——实测 1,695 个含汉字键
+             （1,613 个去重键）够不到，全是 を禁じ得ない / あごを出す /
+             あいた口が塞がらぬ 这类惯用句；
+          2. 键中间还有汉字时（を禁じ得ない 的 得），尾串一遇活用
+             （得なかった）就整键崩掉。
+        新规则仍是「连续整 token 对齐」，不放宽成任意子串：
+          - 汉字段：必须由某一个 token 的 surface / 词典形 / 读音整段命中
+            （訳≈わけ 的读音变体由 _key_variants 在外层展开）；
+          - 假名段：由紧随的连续 token 拼接命中；段末允许用词典形对齐
+            （ない ⇄ なかった，得ない ⇄ 得なかった）；
+          - 段间不留空隙，单段最多吃 8 个 token，不跨句读点。
+        返回 (start, end) 或 None。
+        """
+        segs = self._SEG_RE.findall(vkey)
+        if not segs or "".join(segs) != vkey:
+            return None
+        n = len(tokens)
+        for start in range(lo, hi):
+            pos = start
+            ok = True
+            for seg in segs:
+                if is_kanji(seg[0]):
+                    if pos >= n:
+                        ok = False
+                        break
+                    forms = {seg} | self._kanji_readings(seg)
+                    if not (tokens[pos] in forms or dicts[pos] in forms
+                            or readings[pos] in forms):
+                        ok = False
+                        break
+                    pos += 1
+                    continue
+                acc, hit = "", None
+                for j in range(pos, min(pos + 8, n)):
+                    t = tokens[j]
+                    if any(c in SENT_PUNCT for c in t):
+                        break
+                    nxt = acc + t
+                    if nxt == seg:
+                        hit = j + 1
+                        break
+                    if seg.startswith(nxt):
+                        acc = nxt
+                        continue
+                    # 段末活用对齐：本 token 用词典形刚好补完剩余部分
+                    if seg[len(acc):] == dicts[j]:
+                        hit = j + 1
+                    break
+                if hit is None:
+                    ok = False
+                    break
+                pos = hit
+            if ok and pos > start:
+                return (start, pos)
+        return None
+
+    def match(self, sentence, max_hits=4, tokenizer=None, trace=None):
+        """整句匹配。trace 非 None 时写入阶段快照（id 列表），供审计脚本定位丢弃点：
+        hits=进榜 / sorted=排序后 / rich=富条目闸后 / dedup=去冗余后 / final=截断后。不影响输出。"""
         s = norm(sentence)
         tokens = readings = dicts = pos_list = None
         if tokenizer is not None:
@@ -401,6 +475,10 @@ class GrammarDB:
             charset |= set("".join(tokens)) | set("".join(readings)) | set("".join(dicts))
         hits = {}
         for key, has_kanji, e in self.index:
+            # 裸功能词闸（见 _MATCH_STOP）：单 key 就是裸する/して/のり 这类高频词，
+            # 整句命中必是误报，直接跳过（多段槽位 key 不受影响）。
+            if key in self._MATCH_STOP:
+                continue
             # 字符集预筛：key 任一变体的字符必须都在句中出现（必要条件）；
             # 内部 〜 是槽位标记，不参与字符集判定
             if not all(c in charset for c in key if c not in "〜~～"):
@@ -411,17 +489,39 @@ class GrammarDB:
                     sys.stderr.write(f"[hit] {e['pattern']} | key={key!r} | span={span}\n")
                 eid = e["id"]
                 if eid not in hits or len(key) > hits[eid][1]:
-                    hits[eid] = (e, len(key))
-        result = [e for e, _ in hits.values()]
-        # 排序：命中 key 更长（更具体）优先，其次等级更高（N1>N5）
+                    hits[eid] = (e, len(key), span)
+        if trace is not None:
+            trace.clear()
+            trace["hits"] = sorted(hits, key=lambda i: -hits[i][1])
+        result = [e for e, _, _ in hits.values()]
+        # 排序：命中 key 更长（更具体）优先，其次等级更高（N1>N5），
+        # 再次字段更完整（消歧用，确定性输出）。span 记在 _span 供出口输出。
         def best_len(e):
-            ks = [k for k, hk in self._entry_keys(e)
-                  if self._find(k, hk, s, tokens, readings, dicts, pos_list)]
-            return max((len(k) for k in ks), default=0)
-        result.sort(key=lambda e: (-best_len(e), -LEVEL_ORDER.get(e.get("level") or "", 0)))
-        result = self._dedup(result, s, tokens, readings, dicts, pos_list)
-        # 出口质量闸门：只保留 rich 条目（有接续/语感/例句），裸条目视同未命中
+            best = (0, None)
+            for k, hk in self._entry_keys(e):
+                sp = self._find(k, hk, s, tokens, readings, dicts, pos_list)
+                if sp and len(k) > best[0]:
+                    best = (len(k), sp)
+            return best
+        scored = []
+        for e in result:
+            ln, sp = best_len(e)
+            e["_span"] = list(sp) if sp else None
+            scored.append((-ln, -LEVEL_ORDER.get(e.get("level") or "", 0),
+                           -sum(1 for f in ("formation", "nuance", "examples") if e.get(f)), e))
+        scored.sort(key=lambda t: t[:3])
+        result = [t[3] for t in scored]
+        if trace is not None:
+            trace["sorted"] = [e["id"] for e in result]
+        # 出口质量闸门先于去冗余：只让「能出口的」富条目参与去重仲裁，
+        # 否则被闸门丢掉的裸条目会在 _dedup 里挤掉富条目（见 __init__ 同一处注释）。
         result = [e for e in result if _rich(e)]
+        if trace is not None:
+            trace["rich"] = [e["id"] for e in result]
+        result = self._dedup(result, s, tokens, readings, dicts, pos_list)
+        if trace is not None:
+            trace["dedup"] = [e["id"] for e in result]
+            trace["final"] = [e["id"] for e in result[:max_hits]]
         return result[:max_hits]
 
     def _entry_keys(self, e):
@@ -551,10 +651,14 @@ class DictDB:
         return " / ".join(out)
 
     # ---- Tatoeba 日中句对：按子串检索真实例句（16k 句，LIKE 足够快）----
+    # 排序：词面以独立词形出现（前/后不接假名，如「言葉」不匹配「言葉遣い」内部）优先，
+    # 其次按句长升序（短句好背）。
     def sentences(self, word, limit=3):
         rows = self.con.execute(
-            "SELECT ja, zh FROM sentences WHERE ja LIKE ? ORDER BY length(ja) LIMIT ?",
-            ("%" + word + "%", limit)).fetchall()
+            "SELECT ja, zh FROM sentences WHERE ja LIKE ? "
+            "ORDER BY (CASE WHEN ja LIKE ? OR ja LIKE ? OR ja LIKE ? THEN 0 ELSE 1 END), "
+            "length(ja) LIMIT ?",
+            ("%" + word + "%", word + "%", "%、" + word + "%", "% " + word + "%", limit)).fetchall()
         return [dict(r) for r in rows]
 
     def search(self, q, limit=10):
@@ -813,6 +917,8 @@ def main():
     ap.add_argument("--syn", nargs="+", metavar="WORD", help="查 WordNet 义项（近义/上位/对义，辨析用）")
     ap.add_argument("--sent", nargs="+", metavar="WORD", help="查 Tatoeba 日中对照真实例句")
     ap.add_argument("--limit", type=int, default=3, help="每项返回条数（默认 3）")
+    ap.add_argument("--max-hits", type=int, default=4,
+                    help="整句模式最多保留几个语法命中（默认 4；噪音多时调小，怕漏调大）")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     a = ap.parse_args()
 
@@ -892,12 +998,25 @@ def main():
                   for w, v in out.items()))
         return
     if a.text:
-        g = GrammarDB()
-        tok = get_tokenizer()
-        hits = g.match(a.text, tokenizer=tok)
-        toks = tokenize(a.text)
+        # degraded 兜底：数据层异常（缺分词依赖/grammar.json/sqlite）不裸 traceback，
+        # 输出结构化降级结果且 exit 0，由调用方（SKILL.md）决定怎么标注降级。
+        try:
+            g = GrammarDB()
+            tok = get_tokenizer()
+            hits = g.match(a.text, max_hits=a.max_hits, tokenizer=tok)
+            toks = tokenize(a.text)
+        except SystemExit:
+            raise
+        except BaseException as ex:
+            if a.json:
+                print(json.dumps({"degraded": True, "reason": f"{type(ex).__name__}: {ex}",
+                                  "tokens": [], "hits": []}, ensure_ascii=False, indent=1))
+            else:
+                print(f"[degraded] 检索库暂不可用：{type(ex).__name__}: {ex}")
+            return
         if a.json:
-            print(json.dumps({"tokens": toks, "hits": hits}, ensure_ascii=False, indent=1))
+            print(json.dumps({"degraded": False, "tokens": toks, "hits": hits},
+                             ensure_ascii=False, indent=1))
         else:
             print(f"句子: {a.text}")
             print("分词: " + " / ".join(
