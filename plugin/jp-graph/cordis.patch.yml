@@ -1,0 +1,5 @@
+- insert:
+    - id: jp-graph
+      name: '@local/jp-graph'
+      config:
+        workspace: 'C:\Users\zgw31\Documents\deepseek-harness\japanese-workspace'

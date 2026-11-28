@@ -33,7 +33,10 @@ japanese-workspace/
 │   ├── build_dict.py           # 清洗合并 → ja_dict.sqlite（词/汉字/WordNet/句对）
 │   ├── gen_zh.py               # 本地模型生成：英文讲解→中文、汉字英文义→中文（端点可用 JA_LLM_BASE_URL 覆盖）
 │   ├── ja_lookup.py            # 检索库（GrammarDB / DictDB / ConjDB / KanjiDB / WordNetDB）
+│   ├── jgraph.py               # 知识图谱引擎：语法↔单词↔例句的关联查询（只读，worker 模式）
 │   └── test_match.py           # 语法命中率测试（带回归闸门，非零退出码=回归）
+├── plugin/
+│   └── jp-graph/               # DSH 插件：左侧栏「日語學習」知识图谱面板（Host API + Client）
 ├── jisho/                      # 子项目：抓 Jisho 真实例句（依赖走 .venv，见 jisho/README.md）
 ├── LICENSE                     # 仓库自研代码 MIT；数据各循上游许可（见下「数据源与许可」）
 └── README.md
@@ -183,6 +186,32 @@ d.sentences("言葉", limit=3)
 # 分词（带读音/原形/词性）
 tokenize("協力するかしないかは別として")
 ```
+
+## 知识图谱面板（左侧栏插件）
+
+数据不只给 Agent 用：`plugin/jp-graph` 是一个带左侧栏入口的 DSH 插件，把语法、单词、例句画成可交互的关系图。选一个词，它连出这个词相关的语法、例句和近义／反义／上位／下位词；选一条语法，连出它的例句、同检索键的近义语法和构成词。
+
+![知识图谱首页：以「Clause + が / けど / けれども」为中心，连出例句、近义语法与构成词](plugin/jp-graph/docs/screenshots/home.png)
+
+- **左：分类** — 把库里的 tags 统计成「功能／语域／难度／类型」四组，点一个标签就把整组语法排成格子拉进图里（例如「結果」22 条）。
+- **中：关系图** — 语法＝方框、单词＝绿点、例句＝虚线框；可拖节点、拖背景平移、滚轮缩放。
+- **右：节点资料** — 接续、语感、例句、标签、来源，以及分组的关联清单；点清单里任一项就把它接进图。
+
+![选中「学校」：右侧列出相关语法、8 句 Tatoeba 例句、上位／下位词与辞书例句](plugin/jp-graph/docs/screenshots/word-school.png)
+
+连线全部来自库内真实关系，不是模型猜的：
+
+| 连线 | 来源 |
+|---|---|
+| 语法 → 例句 | `examples.id` = `grammar.id`、`grammar.json` 自带例句 |
+| 语法 → 语法 | 同检索键（`keys`，近义／对照）、同功能标签交集 |
+| 语法 → 单词 | 检索键本身是词典词、例句分词后的高频实词 |
+| 单词 → 语法 | 检索键命中、句型含该词、含该词的例句中实际比对到的语法 |
+| 单词 → 单词／例句 | 日本語WordNet 关系、Tatoeba 16,288 句日中对照 |
+
+![分类群「結果」：22 条语法排成格子，点任一条看它的关联](plugin/jp-graph/docs/screenshots/facet-result.png)
+
+安装：DSH → 插件 → 添加插件 → 选 `plugin/jp-graph`（或 `plugin_manager` 的 `install_bundle`）。查询走 `scripts/jgraph.py`（只读 SQLite，常驻 worker，与 `ja_lookup.py` 共用分词与语法比对器）。详细说明见 [plugin/jp-graph/docs/DETAIL.zh.md](plugin/jp-graph/docs/DETAIL.zh.md)。
 
 ## 匹配策略（为什么不用全句匹配）
 

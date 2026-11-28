@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Japanese study",
+    "description": "Adds a Japanese study entry to the left sidebar and a full graph page over this workspace's local grammar, word and example databases. Selecting a word connects the grammar points, example sentences and related words that actually exist in the data; selecting a grammar point connects its examples, near-synonym entries and component words. The Classification rail groups the stored tags into function, register, level and type facets. Search accepts Japanese, Chinese glosses and English. Read-only: no database is modified.",
+    "detail": "docs/DETAIL.md"
+  }
+}
